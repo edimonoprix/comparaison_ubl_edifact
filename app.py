@@ -1,36 +1,28 @@
 import streamlit as st
 import tempfile
 import os
-import compare  # ton fichier compare.py
+import compare
 
-# ===== CONFIG APP =====
-st.set_page_config(
-    page_title="Comparateur XML ↔ EDI",
-    page_icon="📄",
-    layout="centered"
-)
+# ===== CONFIG =====
+st.set_page_config(page_title="Comparateur XML ↔ EDI")
 
-# ===== HEADER =====
+# ===== UI =====
 st.title("📄 Comparateur XML ↔ EDI")
-st.write("Chargez vos fichiers XML et EDI pour générer un Excel automatiquement.")
+st.write("Chargez vos fichiers XML et EDI pour générer un Excel.")
 
-st.markdown("---")
+# Upload fichiers
+xml_file = st.file_uploader("📥 Fichier XML", type=["xml"], key="xml")
+edi_file = st.file_uploader("📥 Fichier EDI", type=["txt", "edi"], key="edi")
 
-# ===== UPLOAD =====
-xml_file = st.file_uploader("📥 Importer fichier XML", type=["xml"])
-edi_file = st.file_uploader("📥 Importer fichier EDI", type=["txt", "edi"])
-
-st.markdown("---")
-
-# ===== ACTION =====
-if st.button("🚀 Lancer la comparaison"):
+# Bouton (clé unique très important)
+if st.button("🚀 Lancer la comparaison", key="run"):
 
     if xml_file is None or edi_file is None:
         st.warning("⚠️ Merci de charger les deux fichiers.")
     else:
-        with st.spinner("⏳ Traitement en cours..."):
+        with st.spinner("Traitement en cours..."):
 
-            # Sauvegarde temporaire des fichiers
+            # fichiers temporaires
             tmp_xml = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
             tmp_xml.write(xml_file.read())
             tmp_xml.close()
@@ -40,31 +32,24 @@ if st.button("🚀 Lancer la comparaison"):
             tmp_edi.close()
 
             try:
-                # === APPEL DE TON SCRIPT ===
                 edi_segments = compare.extract_edi_segments(tmp_edi.name)
                 rows = compare.extract_xml_pairs(tmp_xml.name)
 
                 output_file = compare.write_excel(rows, edi_segments)
 
-                st.success("✅ Fichier généré avec succès !")
+                st.success("✅ Fichier généré !")
 
-                # === BOUTON TELECHARGEMENT ===
                 with open(output_file, "rb") as f:
                     st.download_button(
-                        label="📥 Télécharger le fichier Excel",
-                        data=f,
+                        "📥 Télécharger le fichier Excel",
+                        f,
                         file_name="compare.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        key="download"
                     )
 
             except Exception as e:
-                st.error(f"❌ Une erreur est survenue : {e}")
+                st.error(f"Erreur : {e}")
 
             finally:
-                # Nettoyage
                 os.remove(tmp_xml.name)
                 os.remove(tmp_edi.name)
-
-# ===== FOOTER =====
-st.markdown("---")
-st.caption("Outil interne - Comparateur XML / EDI")

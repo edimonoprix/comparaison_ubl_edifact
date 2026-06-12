@@ -4,17 +4,15 @@ import xml.etree.ElementTree as ET
 import xlsxwriter
 
 # ================================================================
-# MAPPING XML → EDI (FR)
+# MAPPING XML → EDI
 # ================================================================
 
 RULES = {
     "InvoiceNumber": ("BGM", "Numéro de facture"),
-    "InvoiceIssueDate": ("DTM+137", "Date d’émission"),
-    "ActualShipDate": ("DTM+11", "Date de livraison"),
-    "PurchaseOrderDate": ("DTM+171", "Date de commande"),
-    "BuyerOrderNumber": ("RFF+ON", "Numéro de commande"),
-    "RefNum": ("RFF+DQ", "Référence"),
-    "InvoiceDueDate": ("DTM+13", "Date d’échéance"),
+    "InvoiceIssueDate": ("DTM", "Date facture"),
+    "InvoiceDueDate": ("DTM", "Date échéance"),
+    "BuyerOrderNumber": ("RFF", "Commande"),
+    "RefNum": ("RFF", "Référence"),
 }
 
 TRANSLATION_FR = {
@@ -24,12 +22,11 @@ TRANSLATION_FR = {
     "PostalCode": "Code postal",
     "CountryCoded": "Pays",
     "CurrencyCoded": "Devise",
-    "BuyerLineItemNum": "Ligne acheteur",
-    "ProductIdentifier": "Code produit",
-    "ItemDescription": "Description article",
+    "ProductIdentifier": "Produit",
     "QuantityValue": "Quantité",
     "MonetaryAmount": "Montant",
-    "UnitPriceValue": "Prix unitaire",
+    "UnitPriceValue": "Prix",
+    "BuyerLineItemNum": "Ligne",
 }
 
 # ================================================================
@@ -39,208 +36,183 @@ TRANSLATION_FR = {
 def local_name(tag):
     return tag.split("}")[-1]
 
-def clean_text(text):
-    if not text:
-        return ""
-    return text.strip().replace("\n", " ").replace("\r", "")
+def clean_text(v):
+    return v.strip() if v else ""
 
 def iso_to_yyyymmdd(s):
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s))
     return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else s
 
-def normalized_for_edi(tag, value):
+def normalize(tag, value):
     if "Date" in tag:
         return iso_to_yyyymmdd(value)
-    return str(value)
+    return value
 
-def get_available_filename(base="compare.xlsx"):
-    name, ext = os.path.splitext(base)
-    i = 1
-    candidate = base
-    while os.path.exists(candidate):
-        candidate = f"{name}_{i}{ext}"
-        i += 1
-    return candidate
-
-def get_french_label(tag):
+def get_label(tag):
     if tag in RULES:
         return RULES[tag][1]
     if tag in TRANSLATION_FR:
         return TRANSLATION_FR[tag]
     return tag
 
+def get_filename(base="compare.xlsx"):
+    i = 1
+    name, ext = os.path.splitext(base)
+    file = base
+    while os.path.exists(file):
+        file = f"{name}_{i}{ext}"
+        i += 1
+    return file
+
 # ================================================================
-# XML EXTRACTION
+# XML
 # ================================================================
 
-def extract_xml_pairs(xml_file):
+def extract_xml(xml_file):
     tree = ET.parse(xml_file)
     root = tree.getroot()
 
-    pairs = []
     seen = set()
+    data = []
 
-    for elem in root.iter():
-        tag = local_name(elem.tag)
-        value = clean_text(elem.text)
+    for el in root.iter():
+        tag = local_name(el.tag)
+        val = clean_text(el.text)
 
-        if value:
-            key = (tag, value)
-            if key not in seen:
-                seen.add(key)
-                pairs.append(key)
+        if val and (tag, val) not in seen:
+            seen.add((tag, val))
+            data.append((tag, val))
 
-    return pairs
-
-# ================================================================
-# EDI PARSING (corrigé)
-# ================================================================
-
-def extract_edi_segments(edi_path):
-    with open(edi_path, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
-
-    content = content.replace("\n", "")
-
-    return [seg.strip() for seg in content.split("'") if seg.strip()]
+    return data
 
 # ================================================================
-# MATCH INTELLIGENT (corrigé ✅)
+# EDI
 # ================================================================
 
-def find_best_edi_match(edi_segments, tag, value):
+def extract_edi(edi_file):
+    with open(edi_file, "r", encoding="utf-8", errors="ignore") as f:
+        txt = f.read()
 
-    clean_value = normalized_for_edi(tag, value)
+    txt = txt.replace("\n", "")
+    return [s.strip() for s in txt.split("'") if s.strip()]
 
-    if not clean_value:
+# ================================================================
+# ✅ MATCH STRICT (CORRECTION FINALE)
+# ================================================================
+
+def match_edi(segments, tag, value):
+
+    value = normalize(tag, value)
+
+    if not value:
         return ""
 
-    segment_map = {
-        "ProductIdentifier": ["LIN"],
-        "QuantityValue": ["QTY"],
-        "MonetaryAmount": ["MOA"],
-        "UnitPriceValue": ["PRI"],
-        "City": ["NAD"],
-        "Name1": ["NAD"],
-        "Street": ["NAD"],
-        "PostalCode": ["NAD"],
+    # mapping strict métier
+    segment_types = {
+        "ProductIdentifier": "LIN",
+        "QuantityValue": "QTY",
+        "MonetaryAmount": "MOA",
+        "UnitPriceValue": "PRI",
+        "City": "NAD",
+        "Name1": "NAD",
+        "Street": "NAD",
+        "PostalCode": "NAD",
+        "CountryCoded": "NAD",
+        "CurrencyCoded": "CUX",
+        "BuyerLineItemNum": "LIN",
     }
 
-    allowed_segments = segment_map.get(tag, None)
+    seg_type = segment_types.get(tag)
 
-    best_match = ""
+    for seg in segments:
 
-    for seg in edi_segments:
+        # ✅ bloquer segments interdits
+        if seg.startswith(("UNB", "UNT", "UNZ")):
+            continue
 
-        # filtre type
-        if allowed_segments:
-            if not any(seg.startswith(code) for code in allowed_segments):
-                continue
+        # ✅ filtrer type
+        if seg_type and not seg.startswith(seg_type):
+            continue
 
-        # 🔥 match EXACT uniquement (corrige ton problème)
-        if clean_value == re.findall(r"[0-9.]+", seg)[-1] if re.findall(r"[0-9.]+", seg) else False:
+        # ✅ extraire uniquement les valeurs utiles
+        numbers = re.findall(r"\d+\.?\d*", seg)
+
+        # ✅ match EXACT uniquement
+        if value in numbers:
             return seg
 
-        # fallback raisonnable
-        if clean_value in seg:
-            best_match = seg
+        # ✅ pour texte (nom, ville...)
+        if value.upper() in seg.upper():
+            return seg
 
-    return best_match
+    return ""
 
 # ================================================================
-# ✅ HIGHLIGHT XML VALUE (ROUGE)
+# ✅ XML EN ROUGE
 # ================================================================
 
-def write_xml_highlight(ws, row, col, tag, value, fmt_red):
-    open_tag = f"<{tag}>"
-    close_tag = f"</{tag}>"
-
+def write_xml(ws, row, col, tag, val, red):
     ws.write_rich_string(
         row, col,
-        open_tag,
-        fmt_red, value,
-        close_tag
+        f"<{tag}>",
+        red, val,
+        f"</{tag}>"
     )
 
 # ================================================================
-# EXPORT EXCEL FINAL
+# EXCEL
 # ================================================================
 
-def write_excel(rows, edi_segments):
-    output = get_available_filename("compare.xlsx")
+def write_excel(xml_data, edi_segments):
+    file = get_filename()
 
-    workbook = xlsxwriter.Workbook(output)
-    ws = workbook.add_worksheet("Comparaison")
+    wb = xlsxwriter.Workbook(file)
+    ws = wb.add_worksheet("Comparaison")
 
-    bold = workbook.add_format({"bold": True})
-    red = workbook.add_format({"font_color": "red"})
-    blue = workbook.add_format({"font_color": "blue"})
+    bold = wb.add_format({"bold": True})
+    red = wb.add_format({"font_color": "red"})
+    blue = wb.add_format({"font_color": "blue"})
 
-    # headers
-    ws.write(0, 0, "Ligne XML", bold)
-    ws.write(0, 1, "Segment EDI", bold)
-    ws.write(0, 2, "Fonction (FR)", bold)
+    ws.write(0, 0, "XML", bold)
+    ws.write(0, 1, "EDI", bold)
+    ws.write(0, 2, "Fonction", bold)
 
-    row_index = 1
-    used_edi = set()
+    used = set()
+    r = 1
 
-    # ==================================================
-    # 1) XML → EDI
-    # ==================================================
-    for tag, value in rows:
+    # ==================================
+    # XML → EDI
+    # ==================================
+    for tag, val in xml_data:
 
-        label = get_french_label(tag)
+        label = get_label(tag)
+        edi = match_edi(edi_segments, tag, val)
 
-        edi_match = find_best_edi_match(edi_segments, tag, value)
+        write_xml(ws, r, 0, tag, val, red)
 
-        # ✅ XML avec valeur en rouge
-        write_xml_highlight(ws, row_index, 0, tag, value, red)
-
-        if edi_match:
-            ws.write(row_index, 1, edi_match)
-            used_edi.add(edi_match)
+        if edi:
+            ws.write(r, 1, edi)
+            used.add(edi)
         else:
-            ws.write(row_index, 1, "NON TROUVÉ", red)
+            ws.write(r, 1, "NON TROUVÉ", red)
 
-        ws.write(row_index, 2, label)
+        ws.write(r, 2, label)
+        r += 1
 
-        row_index += 1
-
-    # ==================================================
-    # 2) EDI NON UTILISÉS
-    # ==================================================
+    # ==================================
+    # EDI RESTANTS
+    # ==================================
     for seg in edi_segments:
-        if seg not in used_edi:
-            ws.write(row_index, 0, "")
-            ws.write(row_index, 1, seg, blue)
-            ws.write(row_index, 2, "Segment EDI sans correspondance XML")
-            row_index += 1
+        if seg not in used:
+            ws.write(r, 0, "")
+            ws.write(r, 1, seg, blue)
+            ws.write(r, 2, "EDI non mappé")
+            r += 1
 
     ws.set_column(0, 0, 50)
     ws.set_column(1, 1, 80)
-    ws.set_column(2, 2, 35)
+    ws.set_column(2, 2, 30)
 
-    workbook.close()
+    wb.close()
 
-    return output
-
-# ================================================================
-# MAIN
-# ================================================================
-
-def main():
-    xml_file = "input.xml"
-    edi_file = "input.edi"
-
-    edi_segments = extract_edi_segments(edi_file)
-    rows = extract_xml_pairs(xml_file)
-
-    print(f"{len(rows)} lignes XML")
-    print(f"{len(edi_segments)} segments EDI")
-
-    output = write_excel(rows, edi_segments)
-
-    print(f"Fichier généré : {output}")
-
-if __name__ == "__main__":
-    main()
+    return file

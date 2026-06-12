@@ -115,7 +115,6 @@ def find_best_edi_match(edi_segments, tag, value):
     if not clean_value:
         return ""
 
-    # mapping métier → type segment
     segment_map = {
         "ProductIdentifier": ["LIN"],
         "QuantityValue": ["QTY"],
@@ -129,25 +128,24 @@ def find_best_edi_match(edi_segments, tag, value):
 
     allowed_segments = segment_map.get(tag, None)
 
-    candidates = []
+    best_match = ""
 
     for seg in edi_segments:
 
-        # filtrage par type ✅
+        # filtre type
         if allowed_segments:
             if not any(seg.startswith(code) for code in allowed_segments):
                 continue
 
+        # 🔥 match EXACT uniquement (corrige ton problème)
+        if clean_value == re.findall(r"[0-9.]+", seg)[-1] if re.findall(r"[0-9.]+", seg) else False:
+            return seg
+
+        # fallback raisonnable
         if clean_value in seg:
-            candidates.append((seg, 2))
-        elif clean_value.lower() in seg.lower():
-            candidates.append((seg, 1))
+            best_match = seg
 
-    if candidates:
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        return candidates[0][0]
-
-    return ""
+    return best_match
 
 # ================================================================
 # ✅ HIGHLIGHT XML VALUE (ROUGE)

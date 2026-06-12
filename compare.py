@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 import xlsxwriter
 
 # ================================================================
-# MAPPING XML → EDI + LIBELLE FR
+# MAPPING PRO
 # ================================================================
 
 RULES = {
@@ -15,6 +15,7 @@ RULES = {
     "RefNum": ("RFF", "Référence"),
 }
 
+# Traduction directe
 TRANSLATION_FR = {
     "Name1": "Nom",
     "Street": "Adresse",
@@ -25,9 +26,54 @@ TRANSLATION_FR = {
     "ProductIdentifier": "Produit",
     "QuantityValue": "Quantité",
     "MonetaryAmount": "Montant",
-    "UnitPriceValue": "Prix",
+    "UnitPriceValue": "Prix unitaire",
     "BuyerLineItemNum": "Ligne",
 }
+
+# ================================================================
+# ✅ Traduction automatique FR
+# ================================================================
+
+def auto_translate(tag):
+    words = re.findall('[A-Z][^A-Z]*', tag)
+
+    dictionary = {
+        "Name": "Nom",
+        "Street": "Adresse",
+        "City": "Ville",
+        "Postal": "Postal",
+        "Code": "Code",
+        "Country": "Pays",
+        "Currency": "Devise",
+        "Amount": "Montant",
+        "Quantity": "Quantité",
+        "Price": "Prix",
+        "Date": "Date",
+        "Invoice": "Facture",
+        "Buyer": "Acheteur",
+        "Seller": "Vendeur",
+        "Order": "Commande",
+        "Ref": "Référence",
+        "Identifier": "Identifiant",
+        "Number": "Numéro",
+        "Line": "Ligne",
+        "Tax": "Taxe",
+        "Type": "Type",
+        "Description": "Description",
+        "Term": "Condition",
+        "Purpose": "Objet",
+        "Item": "Article",
+    }
+
+    translated = [dictionary.get(w, w) for w in words]
+    return " ".join(translated)
+
+def get_label(tag):
+    if tag in RULES:
+        return RULES[tag][1]
+    if tag in TRANSLATION_FR:
+        return TRANSLATION_FR[tag]
+    return auto_translate(tag)
 
 # ================================================================
 # UTILS
@@ -39,33 +85,12 @@ def local_name(tag):
 def clean_text(v):
     return v.strip() if v else ""
 
-def iso_to_yyyymmdd(s):
-    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s))
-    return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else s
-
-def normalize(tag, value):
-    if "Date" in tag:
-        return iso_to_yyyymmdd(value)
-    return value
-
-def get_label(tag):
-    if tag in RULES:
-        return RULES[tag][1]
-    if tag in TRANSLATION_FR:
-        return TRANSLATION_FR[tag]
-    return tag
-
-def get_filename(base="compare.xlsx"):
-    i = 1
-    name, ext = os.path.splitext(base)
-    file = base
-    while os.path.exists(file):
-        file = f"{name}_{i}{ext}"
-        i += 1
-    return file
+def format_date(value):
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", value)
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else value
 
 # ================================================================
-# EXTRACTION XML
+# XML
 # ================================================================
 
 def extract_xml(xml_file):
@@ -86,7 +111,7 @@ def extract_xml(xml_file):
     return data
 
 # ================================================================
-# EXTRACTION EDI
+# EDI
 # ================================================================
 
 def extract_edi(edi_file):
@@ -97,15 +122,13 @@ def extract_edi(edi_file):
     return [s.strip() for s in txt.split("'") if s.strip()]
 
 # ================================================================
-# ✅ MATCH STRICT CORRIGÉ
+# ✅ MATCH METIER FINAL
 # ================================================================
 
 def match_edi(segments, tag, value):
 
-    value = normalize(tag, value)
-
-    if not value:
-        return ""
+    if "Date" in tag:
+        value = format_date(value)
 
     segment_types = {
         "ProductIdentifier": "LIN",
@@ -125,29 +148,28 @@ def match_edi(segments, tag, value):
 
     for seg in segments:
 
-        # 🚫 bloquer segments inutiles
+        # ❌ EXCLURE segments inutiles
         if seg.startswith(("UNB", "UNT", "UNZ")):
             continue
 
-        # ✅ filtrer type
+        # ✅ filtrage métier
         if seg_type and not seg.startswith(seg_type):
             continue
 
-        # ✅ récupérer valeurs numériques
         numbers = re.findall(r"\d+\.?\d*", seg)
 
-        # ✅ match strict chiffre
+        # ✅ match strict numérique
         if value in numbers:
             return seg
 
-        # ✅ match texte (ville, nom…)
+        # ✅ match texte
         if value.upper() in seg.upper():
             return seg
 
     return ""
 
 # ================================================================
-# XML EN ROUGE
+# XML en rouge
 # ================================================================
 
 def write_xml(ws, row, col, tag, val, red):
@@ -159,30 +181,37 @@ def write_xml(ws, row, col, tag, val, red):
     )
 
 # ================================================================
-# EXPORT EXCEL
+# ✅ EXTRAIRE VALEUR EDI
+# ================================================================
+
+def extract_edi_value(segment):
+    numbers = re.findall(r"\d+\.?\d*", segment)
+    return numbers[-1] if numbers else ""
+
+# ================================================================
+# EXCEL FINAL PRO
 # ================================================================
 
 def write_excel(xml_data, edi_segments):
-    file = get_filename()
+    file = "compare.xlsx"
 
     wb = xlsxwriter.Workbook(file)
     ws = wb.add_worksheet("Comparaison")
 
     bold = wb.add_format({"bold": True})
     red = wb.add_format({"font_color": "red"})
+    green = wb.add_format({"font_color": "green"})
     blue = wb.add_format({"font_color": "blue"})
 
-    # Headers
+    # headers
     ws.write(0, 0, "XML", bold)
     ws.write(0, 1, "EDI", bold)
     ws.write(0, 2, "Fonction", bold)
+    ws.write(0, 3, "Résultat", bold)
 
     used = set()
     r = 1
 
-    # ====================================================
-    # XML → EDI
-    # ====================================================
     for tag, val in xml_data:
 
         label = get_label(tag)
@@ -193,34 +222,42 @@ def write_excel(xml_data, edi_segments):
         if edi:
             ws.write(r, 1, edi)
             used.add(edi)
+
+            edi_val = extract_edi_value(edi)
+
+            # ✅ OK / KO automatique
+            if str(val) in str(edi) or str(edi_val) == str(val):
+                ws.write(r, 3, "OK ✅", green)
+            else:
+                ws.write(r, 3, "KO ❌", red)
         else:
             ws.write(r, 1, "NON TROUVÉ", red)
+            ws.write(r, 3, "KO ❌", red)
 
         ws.write(r, 2, label)
         r += 1
 
-    # ====================================================
-    # EDI NON UTILISÉS
-    # ====================================================
+    # segments restants
     for seg in edi_segments:
         if seg not in used:
             ws.write(r, 0, "")
             ws.write(r, 1, seg, blue)
             ws.write(r, 2, "EDI non mappé")
+            ws.write(r, 3, "")
             r += 1
 
     ws.set_column(0, 0, 50)
     ws.set_column(1, 1, 80)
     ws.set_column(2, 2, 30)
+    ws.set_column(3, 3, 15)
 
     wb.close()
 
     return file
 
 # ================================================================
-# ✅ COMPATIBILITÉ AVEC TON APP.PY
+# ✅ COMPATIBILITÉ STREAMLIT
 # ================================================================
 
-# IMPORTANT → évite ton erreur !
 extract_xml_pairs = extract_xml
 extract_edi_segments = extract_edi

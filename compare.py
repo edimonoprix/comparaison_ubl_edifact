@@ -93,55 +93,79 @@ def extract_xml_pairs(xml_file):
     return pairs
 
 # ================================================================
-# ✅ PARSING EDI AVANCÉ (SEGMENTS COMPLEXES)
+# EDI PARSING (corrigé)
 # ================================================================
 
 def extract_edi_segments(edi_path):
     with open(edi_path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # IMPORTANT : corrige les lignes coupées
     content = content.replace("\n", "")
 
-    segments = [seg.strip() for seg in content.split("'") if seg.strip()]
-
-    return segments
+    return [seg.strip() for seg in content.split("'") if seg.strip()]
 
 # ================================================================
-# ✅ MATCH INTELLIGENT (gère segments complexes)
+# MATCH INTELLIGENT (corrigé ✅)
 # ================================================================
 
 def find_best_edi_match(edi_segments, tag, value):
 
     clean_value = normalized_for_edi(tag, value)
 
-    matches = []
+    if not clean_value:
+        return ""
+
+    # mapping métier → type segment
+    segment_map = {
+        "ProductIdentifier": ["LIN"],
+        "QuantityValue": ["QTY"],
+        "MonetaryAmount": ["MOA"],
+        "UnitPriceValue": ["PRI"],
+        "City": ["NAD"],
+        "Name1": ["NAD"],
+        "Street": ["NAD"],
+        "PostalCode": ["NAD"],
+    }
+
+    allowed_segments = segment_map.get(tag, None)
+
+    candidates = []
 
     for seg in edi_segments:
 
-        # match exact (top priorité)
+        # filtrage par type ✅
+        if allowed_segments:
+            if not any(seg.startswith(code) for code in allowed_segments):
+                continue
+
         if clean_value in seg:
-            matches.append((seg, 3))
-
-        # match partiel (texte inclus)
+            candidates.append((seg, 2))
         elif clean_value.lower() in seg.lower():
-            matches.append((seg, 2))
+            candidates.append((seg, 1))
 
-        # correspondance type segment (RULES)
-        elif tag in RULES:
-            code = RULES[tag][0].split("+")[0]
-            if seg.startswith(code):
-                matches.append((seg, 1))
-
-    if matches:
-        # prendre le meilleur score
-        matches.sort(key=lambda x: x[1], reverse=True)
-        return matches[0][0]
+    if candidates:
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[0][0]
 
     return ""
 
 # ================================================================
-# ✅ EXPORT EXCEL COMPLET
+# ✅ HIGHLIGHT XML VALUE (ROUGE)
+# ================================================================
+
+def write_xml_highlight(ws, row, col, tag, value, fmt_red):
+    open_tag = f"<{tag}>"
+    close_tag = f"</{tag}>"
+
+    ws.write_rich_string(
+        row, col,
+        open_tag,
+        fmt_red, value,
+        close_tag
+    )
+
+# ================================================================
+# EXPORT EXCEL FINAL
 # ================================================================
 
 def write_excel(rows, edi_segments):
@@ -162,17 +186,17 @@ def write_excel(rows, edi_segments):
     row_index = 1
     used_edi = set()
 
-    # ============================================
+    # ==================================================
     # 1) XML → EDI
-    # ============================================
+    # ==================================================
     for tag, value in rows:
 
-        xml_line = f"<{tag}>{value}</{tag}>"
         label = get_french_label(tag)
 
         edi_match = find_best_edi_match(edi_segments, tag, value)
 
-        ws.write(row_index, 0, xml_line)
+        # ✅ XML avec valeur en rouge
+        write_xml_highlight(ws, row_index, 0, tag, value, red)
 
         if edi_match:
             ws.write(row_index, 1, edi_match)
@@ -184,9 +208,9 @@ def write_excel(rows, edi_segments):
 
         row_index += 1
 
-    # ============================================
-    # 2) SEGMENTS EDI NON UTILISÉS ✅
-    # ============================================
+    # ==================================================
+    # 2) EDI NON UTILISÉS
+    # ==================================================
     for seg in edi_segments:
         if seg not in used_edi:
             ws.write(row_index, 0, "")
@@ -194,7 +218,6 @@ def write_excel(rows, edi_segments):
             ws.write(row_index, 2, "Segment EDI sans correspondance XML")
             row_index += 1
 
-    # mise en forme
     ws.set_column(0, 0, 50)
     ws.set_column(1, 1, 80)
     ws.set_column(2, 2, 35)

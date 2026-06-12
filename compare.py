@@ -1,52 +1,112 @@
-import streamlit as st
-import tempfile
 import os
-import compare
+import re
+import xml.etree.ElementTree as ET
+import xlsxwriter
 
-st.set_page_config(page_title="Comparateur XML ↔ EDI")
+# ===================================================
+# RULES
+# ===================================================
 
-st.title("📄 Comparateur XML ↔ EDI")
-st.write("Chargez vos fichiers XML et EDI pour générer un Excel.")
+RULES = {
+    "InvoiceNumber": ("BGM", "Numéro facture"),
+    "InvoiceIssueDate": ("DTM+137", "Date facture"),
+}
 
-# Upload
-xml_file = st.file_uploader("Fichier XML", type=["xml"], key="xml")
-edi_file = st.file_uploader("Fichier EDI", type=["txt", "edi"], key="edi")
+# ===================================================
+# UTILS
+# ===================================================
 
-# Bouton
-if st.button("Lancer la comparaison", key="run"):
+def local_name(tag):
+    return tag.split("}")[-1]
 
-    if not xml_file or not edi_file:
-        st.warning("Merci de charger les deux fichiers.")
-    else:
-        with st.spinner("Traitement..."):
+def iso_to_yyyymmdd(s):
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s))
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else s
 
-            tmp_xml = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
-            tmp_xml.write(xml_file.read())
-            tmp_xml.close()
+def get_available_filename(base="compare.xlsx"):
+    name, ext = os.path.splitext(base)
+    i = 1
+    candidate = base
 
-            tmp_edi = tempfile.NamedTemporaryFile(delete=False, suffix=".edi")
-            tmp_edi.write(edi_file.read())
-            tmp_edi.close()
+    while os.path.exists(candidate):
+        candidate = f"{name}_{i}{ext}"
+        i += 1
 
-            try:
-                edi_segments = compare.extract_edi_segments(tmp_edi.name)
-                rows = compare.extract_xml_pairs(tmp_xml.name)
+    return candidate
 
-                output = compare.write_excel(rows, edi_segments)
+# ===================================================
+# XML
+# ===================================================
 
-                st.success("Fichier généré ✅")
+def extract_xml_pairs(xml_file):
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
 
-                with open(output, "rb") as f:
-                    st.download_button(
-                        "Télécharger Excel",
-                        f,
-                        file_name="compare.xlsx",
-                        key="dl"
-                    )
+    pairs = []
 
-            except Exception as e:
-                st.error(str(e))
+    for elem in root.iter():
+        tag = local_name(elem.tag)
 
-            finally:
-                os.remove(tmp_xml.name)
-                os.remove(tmp_edi.name)
+        if tag in RULES and elem.text:
+            pairs.append((tag, elem.text))
+
+    return pairs
+
+# ===================================================
+# EDI
+# ===================================================
+
+def extract_edi_segments(edi_path):
+    with open(edi_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    segments = content.split("'")
+    return [seg.strip() for seg in segments if seg.strip()]
+
+# ===================================================
+# MATCH
+# ===================================================
+
+def find_edi_segment(edi_segments, edi_key, value):
+    code = edi_key.split("+")[0]
+
+    for seg in edi_segments:
+        if seg.startswith(code) and value in seg:
+            return seg
+
+    for seg in edi_segments:
+        if seg.startswith(code):
+            return seg
+
+    return ""
+
+# ===================================================
+# EXCEL
+# ===================================================
+
+def write_excel(rows, edi_segments):
+    output = get_available_filename("compare.xlsx")
+
+    workbook = xlsxwriter.Workbook(output)
+    worksheet = workbook.add_worksheet()
+
+    worksheet.write(0, 0, "Champ")
+    worksheet.write(0, 1, "Valeur XML")
+    worksheet.write(0, 2, "Segment EDI")
+
+    row_index = 1
+
+    for tag, value in rows:
+        edi_key, label = RULES.get(tag, ("", tag))
+
+        edi_segment = find_edi_segment(edi_segments, edi_key, value)
+
+        worksheet.write(row_index, 0, label)
+        worksheet.write(row_index, 1, value)
+        worksheet.write(row_index, 2, edi_segment)
+
+        row_index += 1
+
+    workbook.close()
+
+    return output

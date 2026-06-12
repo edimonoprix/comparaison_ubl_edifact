@@ -230,7 +230,7 @@ def write_excel(xml_data, edi_segments):
         if seg not in used:
             ws.write(r, 0, "")
             ws.write(r, 1, seg, blue)
-            ws.write(r, 2, "EDI non mappé")
+            ws.write(r, 2, "Pas de correspondance dans le fichier xml")
             r += 1
 
     ws.set_column(0, 0, 50)

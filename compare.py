@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 import xlsxwriter
 
 # ================================================================
-# MAPPING XML → EDI
+# MAPPING XML → EDI + LIBELLE FR
 # ================================================================
 
 RULES = {
@@ -65,7 +65,7 @@ def get_filename(base="compare.xlsx"):
     return file
 
 # ================================================================
-# XML
+# EXTRACTION XML
 # ================================================================
 
 def extract_xml(xml_file):
@@ -86,7 +86,7 @@ def extract_xml(xml_file):
     return data
 
 # ================================================================
-# EDI
+# EXTRACTION EDI
 # ================================================================
 
 def extract_edi(edi_file):
@@ -97,7 +97,7 @@ def extract_edi(edi_file):
     return [s.strip() for s in txt.split("'") if s.strip()]
 
 # ================================================================
-# ✅ MATCH STRICT (CORRECTION FINALE)
+# ✅ MATCH STRICT CORRIGÉ
 # ================================================================
 
 def match_edi(segments, tag, value):
@@ -107,7 +107,6 @@ def match_edi(segments, tag, value):
     if not value:
         return ""
 
-    # mapping strict métier
     segment_types = {
         "ProductIdentifier": "LIN",
         "QuantityValue": "QTY",
@@ -126,7 +125,7 @@ def match_edi(segments, tag, value):
 
     for seg in segments:
 
-        # ✅ bloquer segments interdits
+        # 🚫 bloquer segments inutiles
         if seg.startswith(("UNB", "UNT", "UNZ")):
             continue
 
@@ -134,21 +133,21 @@ def match_edi(segments, tag, value):
         if seg_type and not seg.startswith(seg_type):
             continue
 
-        # ✅ extraire uniquement les valeurs utiles
+        # ✅ récupérer valeurs numériques
         numbers = re.findall(r"\d+\.?\d*", seg)
 
-        # ✅ match EXACT uniquement
+        # ✅ match strict chiffre
         if value in numbers:
             return seg
 
-        # ✅ pour texte (nom, ville...)
+        # ✅ match texte (ville, nom…)
         if value.upper() in seg.upper():
             return seg
 
     return ""
 
 # ================================================================
-# ✅ XML EN ROUGE
+# XML EN ROUGE
 # ================================================================
 
 def write_xml(ws, row, col, tag, val, red):
@@ -160,7 +159,7 @@ def write_xml(ws, row, col, tag, val, red):
     )
 
 # ================================================================
-# EXCEL
+# EXPORT EXCEL
 # ================================================================
 
 def write_excel(xml_data, edi_segments):
@@ -173,6 +172,7 @@ def write_excel(xml_data, edi_segments):
     red = wb.add_format({"font_color": "red"})
     blue = wb.add_format({"font_color": "blue"})
 
+    # Headers
     ws.write(0, 0, "XML", bold)
     ws.write(0, 1, "EDI", bold)
     ws.write(0, 2, "Fonction", bold)
@@ -180,9 +180,9 @@ def write_excel(xml_data, edi_segments):
     used = set()
     r = 1
 
-    # ==================================
+    # ====================================================
     # XML → EDI
-    # ==================================
+    # ====================================================
     for tag, val in xml_data:
 
         label = get_label(tag)
@@ -199,9 +199,9 @@ def write_excel(xml_data, edi_segments):
         ws.write(r, 2, label)
         r += 1
 
-    # ==================================
-    # EDI RESTANTS
-    # ==================================
+    # ====================================================
+    # EDI NON UTILISÉS
+    # ====================================================
     for seg in edi_segments:
         if seg not in used:
             ws.write(r, 0, "")
@@ -216,3 +216,11 @@ def write_excel(xml_data, edi_segments):
     wb.close()
 
     return file
+
+# ================================================================
+# ✅ COMPATIBILITÉ AVEC TON APP.PY
+# ================================================================
+
+# IMPORTANT → évite ton erreur !
+extract_xml_pairs = extract_xml
+extract_edi_segments = extract_edi
